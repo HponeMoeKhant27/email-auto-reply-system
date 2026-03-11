@@ -19,7 +19,8 @@ const config = {
       pass: requiredEnv('IMAP_PASSWORD')
     },
     mailbox: process.env.IMAP_MAILBOX || 'INBOX',
-    pollIntervalMs: Number(process.env.IMAP_POLL_INTERVAL_MS || 30000)
+    pollIntervalMs: Number(process.env.IMAP_POLL_INTERVAL_MS || 30000),
+    maxMessagesPerPoll: Number(process.env.IMAP_MAX_MESSAGES_PER_POLL || 50)
   },
   smtp: {
     host: requiredEnv('SMTP_HOST'),
@@ -41,12 +42,19 @@ const config = {
       // Global rate limit: max X jobs per Y ms
       max: Number(process.env.QUEUE_RATE_LIMIT_MAX || 30),
       duration: Number(process.env.QUEUE_RATE_LIMIT_DURATION_MS || 60000)
-    }
+    },
+    // Stagger jobs: delay (ms) added per job in a batch (0 = no delay). Reduces SMTP burst.
+    jobDelayMs: Number(process.env.QUEUE_JOB_DELAY_MS || 0)
   },
   perSender: {
     maxReplies: Number(process.env.PER_SENDER_MAX_REPLIES || 10),
     windowMs: Number(process.env.PER_SENDER_WINDOW_MS || 3600000)
-  }
+  },
+  // Addresses we never auto-reply to (bounce/system). Comma-separated, case-insensitive substring match.
+  skipAddresses: (process.env.REPLY_SKIP_ADDRESSES || 'mailer-daemon@,postmaster@')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
 };
 
 module.exports = config;

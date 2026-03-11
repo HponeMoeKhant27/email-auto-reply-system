@@ -3,6 +3,7 @@ const config = require('./config');
 const logger = require('./logger');
 const { createWorker } = require('./queue');
 const { buildAutoReply } = require('./replyTemplate');
+const { isValidEmail } = require('./emailValidation');
 
 const transporter = nodemailer.createTransport({
   host: config.smtp.host,
@@ -11,8 +12,22 @@ const transporter = nodemailer.createTransport({
   auth: config.smtp.auth
 });
 
+function isBlockedAddress(email) {
+  const lower = (email || '').toLowerCase();
+  return config.skipAddresses.some((skip) => lower.includes(skip));
+}
+
 async function processJob(job) {
   const { to, subject, messageId } = job.data;
+  if (isBlockedAddress(to)) {
+    logger.info({ to }, 'Skipping send to blocked address (bounce/system)');
+    return;
+  }
+  if (!isValidEmail(to)) {
+    logger.warn({ to }, 'Skipping send to invalid email address (e.g. missing domain label)');
+    return;
+  }
+
   const reply = buildAutoReply(subject, null, to);
 
   const mailOptions = {

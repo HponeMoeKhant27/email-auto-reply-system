@@ -2,6 +2,7 @@ const { ImapFlow } = require('imapflow');
 const config = require('./config');
 const logger = require('./logger');
 const { queue, connection } = require('./queue');
+const { isValidEmail } = require('./emailValidation');
 
 const PROCESSED_SET_KEY = 'email-auto-reply:processed-message-ids';
 
@@ -47,14 +48,39 @@ async function pollOnce(client) {
     return;
   }
 
-  logger.info({ count: messages.length }, 'Found unread messages');
+  const maxPerPoll = config.imap.maxMessagesPerPoll;
+  const batch = maxPerPoll > 0 ? messages.slice(0, maxPerPoll) : messages;
+  if (batch.length < messages.length) {
+    logger.info(
+      { processed: batch.length, deferred: messages.length - batch.length },
+      'Limiting messages per poll; rest will be processed next cycle'
+    );
+  } else {
+    logger.info({ count: batch.length }, 'Found unread messages');
+  }
 
-  for (const msg of messages) {
+  let enqueuedInBatch = 0;
+  for (const msg of batch) {
     const messageId = msg.envelope?.messageId;
     const fromAddress = msg.envelope?.from?.[0]?.address;
 
     if (!fromAddress) {
       logger.warn('Skipping message without from address');
+      continue;
+    }
+
+    const fromLower = fromAddress.toLowerCase();
+    const isBlocked = config.skipAddresses.some((skip) => fromLower.includes(skip));
+    if (isBlocked) {
+      logger.debug({ from: fromAddress }, 'Skipping blocked sender (bounce/system address)');
+      await client.messageFlagsAdd(msg.uid, ['\\Seen']);
+      await markProcessed(messageId);
+      continue;
+    }
+    if (!isValidEmail(fromAddress)) {
+      logger.debug({ from: fromAddress }, 'Skipping invalid sender address');
+      await client.messageFlagsAdd(msg.uid, ['\\Seen']);
+      await markProcessed(messageId);
       continue;
     }
 
@@ -73,11 +99,17 @@ async function pollOnce(client) {
       continue;
     }
 
-    await queue.add('send-auto-reply', {
-      to: fromAddress,
-      subject: msg.envelope.subject,
-      messageId
-    });
+    const delayMs = config.queue.jobDelayMs * enqueuedInBatch;
+    await queue.add(
+      'send-auto-reply',
+      {
+        to: fromAddress,
+        subject: msg.envelope.subject,
+        messageId
+      },
+      delayMs > 0 ? { delay: delayMs } : {}
+    );
+    enqueuedInBatch += 1;
 
     await client.messageFlagsAdd(msg.uid, ['\\Seen']);
     await markProcessed(messageId);

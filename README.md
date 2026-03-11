@@ -58,6 +58,7 @@ cp .env.example .env
 - `IMAP_PASSWORD` – IMAP password
 - `IMAP_MAILBOX` – mailbox name (default `INBOX`)
 - `IMAP_POLL_INTERVAL_MS` – poll interval in ms (default `30000`)
+- `IMAP_MAX_MESSAGES_PER_POLL` – max messages to process per poll (default `50`). Limits burst size; remaining messages are processed in the next cycle. Set to `0` for no limit.
 
 **Required SMTP variables**
 
@@ -67,6 +68,7 @@ cp .env.example .env
 - `SMTP_USER` – SMTP username
 - `SMTP_PASSWORD` – SMTP password
 - `REPLY_FROM` – from address used for replies (e.g. `"Auto Reply <no-reply@example.com>"`)
+- `REPLY_SKIP_ADDRESSES` – comma-separated substrings; we never auto-reply to senders matching these (default: `mailer-daemon@`, `postmaster@`). Avoids replying to bounce/failure notices and "550 no such user" errors.
 
 **Redis & Queue**
 
@@ -75,6 +77,7 @@ cp .env.example .env
 - `QUEUE_CONCURRENCY` – Worker concurrency (default `5`)
 - `QUEUE_RATE_LIMIT_MAX` – Max jobs per window (default `30`)
 - `QUEUE_RATE_LIMIT_DURATION_MS` – Window size in ms (default `60000`)
+- `QUEUE_JOB_DELAY_MS` – Delay in ms between each job in a batch (default `0`). Use e.g. `2000` to stagger sends (2s apart) and avoid SMTP buffering when testing with many recipients.
 
 **Per-sender Protection**
 
@@ -155,6 +158,34 @@ Steps:
    npm start
    # or: npm run dev
    ```
+
+---
+
+### Testing with many users
+
+**Option 1: Seed the queue (no real senders)**
+
+Enqueue many auto-reply jobs so the worker and SMTP are stressed without needing real people to email you. Redis must be running; use the same `.env` as the app.
+
+```bash
+# Enqueue 20 test jobs (to test-user-1@example.com, test-user-2@example.com, ...)
+npm run test:seed -- 20
+
+# Or call the script directly with a custom count and optional recipient(s)
+node scripts/seed-test-jobs.js 50
+node scripts/seed-test-jobs.js 10 your-inbox@gmail.com   # 10 replies all to you
+node scripts/seed-test-jobs.js 6 a@x.com b@x.com        # 6 jobs cycling a, b
+```
+
+Then start the app (`npm run dev` or `npm start`). The worker will process jobs according to `QUEUE_CONCURRENCY`, `QUEUE_RATE_LIMIT_*`, and `QUEUE_JOB_DELAY_MS`.
+
+**Option 2: Real many senders**
+
+1. Set batching and staggering in `.env` to avoid bursts:
+   - `IMAP_MAX_MESSAGES_PER_POLL=20` (process up to 20 per poll)
+   - `QUEUE_JOB_DELAY_MS=2000` (e.g. 2s between each send in a batch)
+2. Have many people send an email to your IMAP inbox (or use multiple accounts you control).
+3. Run the app; replies are sent in batches with delays and rate limits.
 
 ---
 
